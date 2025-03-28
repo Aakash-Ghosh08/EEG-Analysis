@@ -17,23 +17,28 @@ def load_and_preprocess_eeg(file_path, fs=250):
         # Load the data
         df = pd.read_csv(file_path, delimiter="\t")
         
-        # format of the csv file
-        # 0.000000	17822.565773	11587.211381	-20902.747918	-2519.958022	7217.467692	17739.461987	22439.877384	1357.332034	0.002000	0.080000	0.482000	192.000000	0.000000	16.000000	2.000000	128.000000	15.000000	16.000000	0.000000	0.000000	0.000000	1740096180.794478	0.000000
-        # sample_num, channel[1..11], channel[1..10], timestamp, 0
+        # Identify the EEG data column (potentially the first numeric column)
+        numeric_columns = df.select_dtypes(include=[np.number]).columns
+        
+        # If no specific column is specified, use the first numeric column
+        eeg_col = numeric_columns[0]
+        print(f"Using column '{eeg_col}' as EEG data")
         
         # Extract timestamp and convert to datetime
         timestamp_col = df.columns[-2]
         df["Timestamp"] = pd.to_datetime(df[timestamp_col], unit="s")
         
         # Handle missing values
-        df.dropna(inplace=True)
+        df.dropna(subset=[eeg_col], inplace=True)
         
-        # Extract channel data (assuming first data column is EEG)
-        eeg_col = df.columns[1]
-        print(f"Using column '{eeg_col}' as EEG data")
+        # Convert to numeric and handle potential parsing errors
+        df[eeg_col] = pd.to_numeric(df[eeg_col], errors='coerce')
+        
+        # Normalize the signal (optional, but can help with scaling)
+        df["Normalized_EEG"] = (df[eeg_col] - df[eeg_col].mean()) / df[eeg_col].std()
         
         # Detrend the data
-        df["Detrended_EEG"] = signal_detrend(df[eeg_col])
+        df["Detrended_EEG"] = signal_detrend(df["Normalized_EEG"])
         
         # Apply filters
         df["Filtered_EEG"] = apply_all_filters(df["Detrended_EEG"], fs)
@@ -80,10 +85,10 @@ def remove_artifacts(data, threshold=3.5):
     # Z-score based thresholding
     z_scores = (data - data.mean()) / data.std()
     clean_data = data.copy()
-    clean_data[abs(z_scores) > threshold] = np.nan
     
-    # Interpolate missing values
-    clean_data = clean_data.interpolate(method='linear')
+    # Replace extreme values with median instead of NaN
+    median = np.median(data)
+    clean_data[abs(z_scores) > threshold] = median
     
     return clean_data
 
@@ -119,7 +124,7 @@ def compute_band_powers(data, fs):
     total_power = sum(abs_band_powers.values())
     
     # Calculate relative band powers
-    rel_band_powers = {band: power/total_power for band, power in abs_band_powers.items()}
+    rel_band_powers = {band: max(0, power/total_power) for band, power in abs_band_powers.items()}
     
     return abs_band_powers, rel_band_powers
 
